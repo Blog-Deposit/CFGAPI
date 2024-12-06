@@ -4,6 +4,12 @@ export async function onRequest(context) {
     const request = context.request;
     const url = new URL(request.url);
     
+    // Check if the path is "/"
+    if (url.pathname === '/') {
+      url.pathname = '/v1beta';  // Redirect to /v1beta
+      return Response.redirect(url.toString(), 302);
+    }
+
     const newUrl = new URL(url.pathname + url.search, TELEGRAPH_URL);
     
     const providedApiKeys = url.searchParams.get('key');
@@ -43,7 +49,7 @@ export async function onRequest(context) {
 
       let lastContent = null;  // 存储上一次的内容
       let buffer = '';        // 用于处理跨块的数据
-      
+     
       const stream = new ReadableStream({
         async start(controller) {
           try {
