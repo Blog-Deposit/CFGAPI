@@ -3,11 +3,11 @@ export async function onRequest(context) {
     const TELEGRAPH_URL = 'https://generativelanguage.googleapis.com';
     const request = context.request;
     const url = new URL(request.url);
-    
-    // Check if the path is "/"
+
+    // Redirect requests from '/' to '/v1beta'
     if (url.pathname === '/') {
-      url.pathname = '/v1beta';  // Redirect to /v1beta
-      return Response.redirect(url.toString(), 302);
+      const newUrl = new URL('/v1beta', request.url); // Redirect to /v1beta
+      return Response.redirect(newUrl.toString(), 301); // Perform 301 redirect
     }
 
     const newUrl = new URL(url.pathname + url.search, TELEGRAPH_URL);
@@ -49,7 +49,7 @@ export async function onRequest(context) {
 
       let lastContent = null;  // 存储上一次的内容
       let buffer = '';        // 用于处理跨块的数据
-     
+      
       const stream = new ReadableStream({
         async start(controller) {
           try {
