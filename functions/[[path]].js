@@ -4,14 +4,14 @@ export async function onRequest(context) {
     const request = context.request;
     const url = new URL(request.url);
 
-    // Redirect requests from '/' to '/v1beta'
+    // If the path is '/' redirect to '/v1beta'
     if (url.pathname === '/') {
-      const newUrl = new URL('/v1beta', request.url); // Redirect to /v1beta
-      return Response.redirect(newUrl.toString(), 301); // Perform 301 redirect
+      const redirectUrl = new URL('/v1beta', request.url);
+      return Response.redirect(redirectUrl.toString(), 301);
     }
 
+    // Handling the rest of the logic as usual for non-root paths
     const newUrl = new URL(url.pathname + url.search, TELEGRAPH_URL);
-    
     const providedApiKeys = url.searchParams.get('key');
 
     if (!providedApiKeys) {
@@ -19,7 +19,6 @@ export async function onRequest(context) {
     }
 
     const apiKeyArray = providedApiKeys.split(';').map(key => key.trim()).filter(key => key !== '');
-
     if (apiKeyArray.length === 0) {
       return new Response('Valid API key is missing.', { status: 400 });
     }
@@ -41,23 +40,22 @@ export async function onRequest(context) {
       return new Response(`API request failed: ${errorBody}`, { status: response.status });
     }
 
-    // 检查是否是 SSE 流
+    // Checking for SSE streaming content
     if (response.headers.get('content-type')?.includes('text/event-stream')) {
       const reader = response.body.getReader();
       const encoder = new TextEncoder();
       const decoder = new TextDecoder();
 
-      let lastContent = null;  // 存储上一次的内容
-      let buffer = '';        // 用于处理跨块的数据
-      
+      let lastContent = null;  // Store previous content
+      let buffer = '';        // For handling incomplete data blocks
+
       const stream = new ReadableStream({
         async start(controller) {
           try {
             while (true) {
               const {done, value} = await reader.read();
-              
+
               if (done) {
-                // 处理缓冲区中剩余的数据
                 if (buffer) {
                   if (buffer.startsWith('data: ')) {
                     const data = buffer.slice(6);
@@ -80,8 +78,6 @@ export async function onRequest(context) {
 
               buffer += decoder.decode(value);
               const lines = buffer.split('\n');
-              
-              // 保留最后一行，因为它可能是不完整的
               buffer = lines.pop() || '';
 
               for (const line of lines) {
@@ -95,19 +91,12 @@ export async function onRequest(context) {
                   try {
                     const parsedData = JSON.parse(data);
                     const content = extractContent(parsedData);
-                    
-                    // 检查是否是重复内容
                     if (lastContent && isRepeatContent(content, lastContent)) {
-                      continue; // 跳过重复内容
+                      continue;
                     }
-
-                    // 更新最后发送的内容
                     lastContent = content;
-                    
-                    // 发送数据
                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsedData)}\n\n`));
                   } catch (e) {
-                    // 如果解析失败，仍然发送原始数据
                     controller.enqueue(encoder.encode(`data: ${data}\n\n`));
                   }
                 }
@@ -129,7 +118,7 @@ export async function onRequest(context) {
       });
     }
 
-    // 非流式响应直接返回
+    // Non-streaming response handling
     const modifiedResponse = new Response(response.body, response);
     modifiedResponse.headers.set('Access-Control-Allow-Origin', '*');
     modifiedResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -149,7 +138,7 @@ export async function onRequest(context) {
   }
 }
 
-// 从响应数据中提取实际内容
+// Extract the actual content from the response
 function extractContent(parsedData) {
   try {
     return parsedData.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -158,13 +147,13 @@ function extractContent(parsedData) {
   }
 }
 
-// 检查是否是重复内容
+// Check if the current content is a repeat of the last one
 function isRepeatContent(currentContent, lastContent) {
   if (!currentContent || !lastContent) return false;
   return lastContent.endsWith(currentContent);
 }
 
-// 处理 OPTIONS 请求
+// Handling OPTIONS request
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
