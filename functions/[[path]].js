@@ -6,8 +6,8 @@ export async function onRequest(context) {
 
     // If the path is '/' redirect to '/v1beta'
     if (url.pathname === '/') {
-      const redirectUrl = new URL('/v1beta', request.url);
-      return Response.redirect(redirectUrl.toString(), 301);
+      const redirectUrl = new URL('/v1beta', url.origin).toString();
+      return Response.redirect(redirectUrl, 302); // Changed to 302 for temporary redirect
     }
 
     // Handling the rest of the logic as usual for non-root paths
