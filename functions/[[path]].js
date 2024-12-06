@@ -1,26 +1,24 @@
 export async function onRequest(context) {
   try {
-    const GEMINI_URL = 'https://generativelanguage.googleapis.com';
+    const TELEGRAPH_URL = 'https://generativelanguage.googleapis.com';
     const request = context.request;
     const url = new URL(request.url);
+    
+    const newUrl = new URL(url.pathname + url.search, TELEGRAPH_URL);
+    
+    const providedApiKeys = url.searchParams.get('key');
 
-    // 从请求头中获取 OpenAI 格式的 Authorization: Bearer <key> 
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return new Response('API key is missing or incorrect in Authorization header.', { status: 400 });
+    if (!providedApiKeys) {
+      return new Response('API key is missing.', { status: 400 });
     }
 
-    const providedApiKeys = authHeader.slice('Bearer '.length).trim();
     const apiKeyArray = providedApiKeys.split(';').map(key => key.trim()).filter(key => key !== '');
+
     if (apiKeyArray.length === 0) {
       return new Response('Valid API key is missing.', { status: 400 });
     }
 
     const selectedApiKey = apiKeyArray[Math.floor(Math.random() * apiKeyArray.length)];
-
-    // 将请求转发到 Gemini API
-    // 假设转发到 /v1/chat 之类的路径（根据实际Gemini路径修改）
-    const newUrl = new URL(url.pathname + url.search, GEMINI_URL);
     newUrl.searchParams.set('key', selectedApiKey);
 
     const modifiedRequest = new Request(newUrl.toString(), {
@@ -37,21 +35,23 @@ export async function onRequest(context) {
       return new Response(`API request failed: ${errorBody}`, { status: response.status });
     }
 
-    // 检查 Gemini 是否返回 SSE 流
+    // 检查是否是 SSE 流
     if (response.headers.get('content-type')?.includes('text/event-stream')) {
       const reader = response.body.getReader();
       const encoder = new TextEncoder();
       const decoder = new TextDecoder();
 
-      let lastContent = null;
-      let buffer = '';
-
+      let lastContent = null;  // 存储上一次的内容
+      let buffer = '';        // 用于处理跨块的数据
+      
       const stream = new ReadableStream({
         async start(controller) {
           try {
             while (true) {
               const {done, value} = await reader.read();
+              
               if (done) {
+                // 处理缓冲区中剩余的数据
                 if (buffer) {
                   if (buffer.startsWith('data: ')) {
                     const data = buffer.slice(6);
@@ -60,31 +60,28 @@ export async function onRequest(context) {
                         const parsedData = JSON.parse(data);
                         const content = extractContent(parsedData);
                         if (!lastContent || !isRepeatContent(content, lastContent)) {
-                          const openAIData = transformToOpenAISSE(content);
-                          controller.enqueue(encoder.encode(`data: ${JSON.stringify(openAIData)}\n\n`));
+                          controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsedData)}\n\n`));
                         }
                       } catch (e) {
-                        // 无法解析则原样返回(不建议真实场景下如此)
                         controller.enqueue(encoder.encode(`data: ${data}\n\n`));
                       }
                     }
                   }
                 }
-                // 最后发送DONE标记
-                controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
                 controller.close();
                 break;
               }
 
               buffer += decoder.decode(value);
               const lines = buffer.split('\n');
+              
+              // 保留最后一行，因为它可能是不完整的
               buffer = lines.pop() || '';
 
               for (const line of lines) {
                 if (line.startsWith('data: ')) {
                   const data = line.slice(6);
                   if (data === '[DONE]') {
-                    // OpenAI的完成标记
                     controller.enqueue(encoder.encode('data: [DONE]\n\n'));
                     continue;
                   }
@@ -92,17 +89,19 @@ export async function onRequest(context) {
                   try {
                     const parsedData = JSON.parse(data);
                     const content = extractContent(parsedData);
-
+                    
+                    // 检查是否是重复内容
                     if (lastContent && isRepeatContent(content, lastContent)) {
-                      continue;
+                      continue; // 跳过重复内容
                     }
 
+                    // 更新最后发送的内容
                     lastContent = content;
-
-                    // 将Gemini输出转换为OpenAI SSE格式
-                    const openAIData = transformToOpenAISSE(content);
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(openAIData)}\n\n`));
+                    
+                    // 发送数据
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsedData)}\n\n`));
                   } catch (e) {
+                    // 如果解析失败，仍然发送原始数据
                     controller.enqueue(encoder.encode(`data: ${data}\n\n`));
                   }
                 }
@@ -124,12 +123,12 @@ export async function onRequest(context) {
       });
     }
 
-    // 非流式响应
+    // 非流式响应直接返回
     const modifiedResponse = new Response(response.body, response);
     modifiedResponse.headers.set('Access-Control-Allow-Origin', '*');
     modifiedResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     modifiedResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
-
+    
     return modifiedResponse;
 
   } catch (error) {
@@ -144,42 +143,22 @@ export async function onRequest(context) {
   }
 }
 
-// 从Gemini响应数据中提取内容
+// 从响应数据中提取实际内容
 function extractContent(parsedData) {
   try {
-    // Gemini的原结构示例：parsedData.candidates[0].content.parts[0].text
     return parsedData.candidates?.[0]?.content?.parts?.[0]?.text || '';
   } catch (e) {
     return JSON.stringify(parsedData);
   }
 }
 
-// 转换为OpenAI SSE格式数据
-function transformToOpenAISSE(content) {
-  // 随机生成一个id或者使用固定值也行，此处简化处理
-  const now = Math.floor(Date.now() / 1000);
-  return {
-    id: `cmpl-${now}-xyz`,  // 伪id，可根据需要自定义
-    object: "chat.completion.chunk",
-    created: now,
-    model: "gpt-3.5-turbo", // 或根据实际模型名称设定
-    choices: [
-      {
-        delta: {
-          content: content
-        },
-        index: 0,
-        finish_reason: null
-      }
-    ]
-  };
-}
-
+// 检查是否是重复内容
 function isRepeatContent(currentContent, lastContent) {
   if (!currentContent || !lastContent) return false;
   return lastContent.endsWith(currentContent);
 }
 
+// 处理 OPTIONS 请求
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
